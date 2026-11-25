@@ -26,6 +26,7 @@ from transformers import PretrainedConfig
 from vllm.model_executor.models.interfaces import SupportsEagle3
 
 import vllm_neuron.functional as NF
+from vllm_neuron import envs
 from nkilib.core.utils.common_types import NormType
 from vllm_neuron.model.kv_cache import KVSpec, LayerSpec
 from vllm_neuron.model.neuron_config import NeuronConfig
@@ -47,6 +48,9 @@ from ..qwen3_vl.utils.decode_kv import build_per_head_block_table, scatter_new_k
 from .config import Qwen3Config
 
 logger = logging.getLogger(__name__)
+
+# In-tree Qwen3-32B BF16 decode MLP kernel (first draft, off by default).
+_QWEN3_INTREE_MLP_BF16 = envs.VLLM_NEURON_QWEN3_INTREE_MLP_BF16
 
 
 # =============================================================================
@@ -673,12 +677,20 @@ class Qwen3MLP(nn.Module):
             hidden_states = self.tp_group.all_gather(hidden_states, dim=0)
 
         # <-- MODEL-SPECIFIC: SiLU gated MLP
-        output = NF.mlp(
-            hidden_states,
-            self.gate_proj_weight,
-            self.up_proj_weight,
-            self.down_proj_weight,
-        )
+        if not is_prefill and _QWEN3_INTREE_MLP_BF16:
+            output = NF.qwen3_intree_mlp_bf16(
+                hidden_states,
+                self.gate_proj_weight,
+                self.up_proj_weight,
+                self.down_proj_weight,
+            )
+        else:
+            output = NF.mlp(
+                hidden_states,
+                self.gate_proj_weight,
+                self.up_proj_weight,
+                self.down_proj_weight,
+            )
 
         if self.world_size > 1:
             if is_prefill:
