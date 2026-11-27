@@ -740,6 +740,7 @@ class Qwen3DecoderLayerStaticFp8(Qwen3DecoderLayerBf16):
         nn.Module.__init__(self)
         self.layer_idx = layer_idx
         self.rms_norm_eps = config.rms_norm_eps
+        self.dtype = config.torch_dtype
 
         self.input_layernorm = Qwen3RMSNorm(
             config.hidden_size, config.rms_norm_eps, config.torch_dtype
@@ -781,7 +782,7 @@ class Qwen3DecoderLayerStaticFp8(Qwen3DecoderLayerBf16):
         )
         hidden_states = residual + hidden_states
 
-        return hidden_states
+        return hidden_states.to(self.dtype)
 
 
 # =============================================================================
