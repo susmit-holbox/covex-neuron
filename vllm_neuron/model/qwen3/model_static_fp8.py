@@ -351,7 +351,7 @@ class Qwen3AttentionStaticFp8(Qwen3AttentionBf16):
             weight_scales=self.o_weight_scale,
             input_scales=self.o_input_scale,
         )
-        attn_output = attn_output.squeeze(0)
+        attn_output = attn_output.squeeze(0).to(self.dtype)
 
         if self.world_size > 1:
             attn_output = self.tp_group.reduce_scatter(attn_output, dim=0)
@@ -487,7 +487,7 @@ class Qwen3AttentionStaticFp8(Qwen3AttentionBf16):
             if self.world_size > 1:
                 self.tp_group.all_reduce(output)
 
-            return output
+            return output.to(self.dtype)
 
         # nkh == 1 (TP >= num_kv_heads): the kernel takes the squeezed
         # [num_blocks, block_len, d_head] cache + 2D [B, num_blocks] table.
@@ -569,7 +569,7 @@ class Qwen3AttentionStaticFp8(Qwen3AttentionBf16):
         if self.world_size > 1:
             self.tp_group.all_reduce(output)
 
-        return output
+        return output.to(self.dtype)
 
 
 # =============================================================================
