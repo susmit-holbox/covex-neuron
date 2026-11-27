@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Qwen3 MXFP8 checkpoint quantization parsing."""
+"""Qwen3 checkpoint quantization parsing (MXFP8 and static FP8)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from fnmatch import fnmatch
 from typing import Any
 
 # Canonical MX group size (E8M0 shared exponent per 32 elements). Imported by
@@ -15,6 +16,9 @@ MXFP8_GROUP_SIZE = 32
 class QuantScheme(str, Enum):
     NONE = "none"
     MXFP8_DYNAMIC_PER_TOKEN_CHANNELWISE = "mxfp8_dynamic_per_token_channelwise"
+    # NVIDIA ModelOpt static FP8 (float8_e4m3fn) weight + activation, per-tensor
+    # scales. Trn2-compatible (unlike MXFP8, which is Trn3-only).
+    FP8_STATIC_PER_TENSOR = "fp8_static_per_tensor"
 
 
 @dataclass(frozen=True)
@@ -44,12 +48,65 @@ class QuantizationSpec:
             return None
         if quant_method == "compressed-tensors":
             return _parse_compressed_tensors_mxfp8(quantization_config)
+        if quant_method == "modelopt":
+            return _parse_modelopt(quantization_config)
 
         raise ValueError(
             f"Unsupported quantization_config.quant_method={quant_method!r}. "
-            "Qwen3-32B dense currently supports compressed-tensors "
-            "static-weight / dynamic-activation MXFP8 checkpoints."
+            "Qwen3 dense currently supports compressed-tensors "
+            "static-weight / dynamic-activation MXFP8 checkpoints and "
+            "ModelOpt static FP8 checkpoints."
         )
+
+
+def _parse_modelopt(quantization_config: dict[str, Any]) -> QuantizationSpec:
+    """Parse a ModelOpt-format static-FP8 ``quantization_config``.
+
+    Mirrors ``vllm_neuron/model/llama3/quantization.py:_parse_modelopt``.
+    Accepts the nested shape (and the legacy flat shape, like vLLM)::
+
+        {
+          "quant_method": "modelopt",
+          "quantization": {
+            "quant_algo": "FP8",
+            "kv_cache_quant_algo": "FP8",
+            "exclude_modules": ["lm_head", ...]
+          }
+        }
+
+    ``exclude_modules`` is validated (it must list ``"lm_head"`` literally or
+    via a wildcard) to catch unsupported checkpoints. Per-module dispatch is
+    deferred — the spec stores only the scheme.
+
+    Raises:
+        ValueError: when ``quant_algo`` is not FP8, or ``exclude_modules`` is
+            malformed / does not exclude ``lm_head``.
+    """
+    inner = quantization_config.get("quantization")
+    algo_src: dict[str, Any] = inner if isinstance(inner, dict) else quantization_config
+
+    quant_algo = str(algo_src.get("quant_algo", "")).upper()
+    exclude_modules_raw = algo_src.get("exclude_modules") or []
+
+    if quant_algo != "FP8":
+        raise ValueError(
+            "Qwen3 currently only supports ModelOpt quant_algo='FP8', "
+            f"got quant_algo={quant_algo!r}."
+        )
+    if not isinstance(exclude_modules_raw, (list, tuple)):
+        raise ValueError(
+            "ModelOpt quantization_config.exclude_modules must be a list, "
+            f"got {type(exclude_modules_raw).__name__}."
+        )
+
+    patterns = tuple(str(m) for m in exclude_modules_raw)
+    if not any(p == "lm_head" or fnmatch("lm_head", p) for p in patterns):
+        raise ValueError(
+            "ModelOpt FP8 checkpoints for Qwen3 must list 'lm_head' in "
+            f"exclude_modules; got exclude_modules={list(patterns)!r}."
+        )
+
+    return QuantizationSpec(linear_scheme=QuantScheme.FP8_STATIC_PER_TENSOR)
 
 
 def _parse_compressed_tensors_mxfp8(

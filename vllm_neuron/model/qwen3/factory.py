@@ -88,6 +88,19 @@ class Qwen3ForCausalLM(nn.Module):
             is QuantScheme.MXFP8_DYNAMIC_PER_TOKEN_CHANNELWISE
         ):
             from .model_mxfp8 import Qwen3ForCausalLMMxfp8 as Model
+        elif quant_spec is not None and quant_spec.get_scheme(
+            layer_index=None, prefix=""
+        ) is QuantScheme.FP8_STATIC_PER_TENSOR:
+            # TODO(quant, fp8): author the Qwen3 static-FP8 model class
+            # (model_static_fp8) that loads float8_e4m3fn weights + per-tensor
+            # scales and dispatches the static-FP8 GEMM path. The parser above
+            # already accepts ModelOpt FP8 checkpoints; this is the remaining
+            # wiring before Trn2 static-FP8 is serveable.
+            raise NotImplementedError(
+                "Qwen3 static-FP8 (ModelOpt) is not yet implemented: the "
+                "checkpoint is recognized, but the FP8 model class and weight "
+                "loader are still TODO. Serve a BF16 or MXFP8 checkpoint."
+            )
         else:
             from .model import Qwen3ForCausalLM as Model
         return Model
